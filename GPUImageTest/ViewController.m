@@ -15,12 +15,20 @@
 
 @property (nonatomic, assign) int testMode;
 
+@property (nonatomic, copy) NSString *moviePath;
+@property (nonatomic, strong) NSURL *movieURL;
+
+
+/********************/
+@property (nonatomic, strong) GPUImageSepiaFilter *sepiaFilter;
 
 @property (nonatomic, strong) GPUImageVideoCamera *videoCamera;
 @property (nonatomic, strong) GPUImageMovieWriter *movieWriter;
 
 @property (nonatomic, strong) GPUImageTiltShiftFilter *tiltShiftFilter;
 @property (nonatomic, strong) GPUImagePicture *sourcePicture;
+
+@property (nonatomic, strong) UILabel *timeLabel;
 
 @end
 
@@ -29,6 +37,9 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     // Do any additional setup after loading the view, typically from a nib.
+    
+    self.moviePath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Movie.m4v"];
+    self.movieURL = [NSURL fileURLWithPath:self.moviePath isDirectory:NO];
     
     _testMode = 4;
     
@@ -53,9 +64,9 @@
     UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.view.bounds];
     [self.view addSubview:imageView];
     
-    GPUImageSepiaFilter *filter = [[GPUImageSepiaFilter alloc] init];
+    self.sepiaFilter = [[GPUImageSepiaFilter alloc] init];
     UIImage *image = [UIImage imageNamed:@"testimage"];
-    imageView.image = [filter imageByFilteringImage:image];
+    imageView.image = [self.sepiaFilter imageByFilteringImage:image];
 }
 
 
@@ -89,16 +100,14 @@
     imageView.fillMode = kGPUImageFillModeStretch;
     [self.view addSubview:imageView];
     
+    unlink([self.moviePath UTF8String]);//unlink函数:删除文件
+    
+    self.movieWriter = [[GPUImageMovieWriter alloc] initWithMovieURL:self.movieURL size:CGSizeMake(720, 1280)];
+    self.movieWriter.encodingLiveVideo = YES;
+    
     self.videoCamera = [[GPUImageVideoCamera alloc] initWithSessionPreset:AVCaptureSessionPreset1280x720 cameraPosition:AVCaptureDevicePositionFront];
     self.videoCamera.outputImageOrientation = UIInterfaceOrientationPortrait;
     self.videoCamera.horizontallyMirrorFrontFacingCamera = YES;
-    
-    NSString *moviePath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Movie.m4v"];
-    unlink([moviePath UTF8String]);
-    NSURL *movieURL = [NSURL fileURLWithPath:moviePath isDirectory:NO];
-    
-    self.movieWriter = [[GPUImageMovieWriter alloc] initWithMovieURL:movieURL size:CGSizeMake(720, 1280)];
-    self.movieWriter.encodingLiveVideo = YES;
     self.videoCamera.audioEncodingTarget = self.movieWriter;
     [self.videoCamera startCameraCapture];
     
@@ -118,25 +127,7 @@
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [filter removeTarget:self.movieWriter];
         [self.movieWriter finishRecording];
-        
-        //保存相册
-        ALAssetsLibrary *library = [[ALAssetsLibrary alloc] init];
-        if (UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(moviePath)) {
-            [library writeVideoAtPathToSavedPhotosAlbum:movieURL completionBlock:^(NSURL *assetURL, NSError *error) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (error) {
-                        UIAlertView *alertView = [[UIAlertView alloc] initWithTitle:@"movie saved fail" message:@"" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
-                        [alertView show];
-                    } else {
-                        UIAlertView *alertView = [[UIAlertView alloc] initWithTitle:@"movie saved successfully" message:@"" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
-                        [alertView show];
-                    }
-                });
-            }];
-        } else {
-            UIAlertView *alertView = [[UIAlertView alloc] initWithTitle:@"movie saved fail" message:@"" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
-            [alertView show];
-        }
+        [self saveMovieToLibrary];
     });
 }
 
@@ -163,6 +154,53 @@
 }
 
 
+//test5:
+- (void)test5 {
+    GPUImageView *imageView = [[GPUImageView alloc] initWithFrame:self.view.frame];
+    imageView.fillMode = kGPUImageFillModeStretch;
+    [self.view addSubview:imageView];
+    
+    UIButton *button = [[UIButton alloc] initWithFrame:CGRectMake((self.view.frame.size.height - 100)/2, self.view.frame.size.height - 100, 100, 100)];
+    [button setTitle:@"录制" forState:UIControlStateNormal];
+    [button addTarget:self action:@selector(test5_pressButton:) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:button];
+    
+    self.timeLabel = [[UILabel alloc] initWithFrame:CGRectMake(self.view.frame.size.width - 100 - 20, 20, 100, 30)];
+    self.timeLabel.textColor = [UIColor whiteColor];
+    self.timeLabel.textAlignment = NSTextAlignmentRight;
+    [self.view addSubview:self.timeLabel];
+    
+    self.movieWriter = [[GPUImageMovieWriter alloc] initWithMovieURL:self.movieURL size:CGSizeMake(720, 1280)];
+    self.movieWriter.encodingLiveVideo = YES;
+    
+    self.videoCamera = [[GPUImageVideoCamera alloc] initWithSessionPreset:AVCaptureSessionPreset1280x720 cameraPosition:AVCaptureDevicePositionBack];
+    self.videoCamera.outputImageOrientation = [UIApplication sharedApplication].statusBarOrientation;
+    self.videoCamera.audioEncodingTarget = self.movieWriter;
+    [self.videoCamera startCameraCapture];
+    
+    self.sepiaFilter = [[GPUImageSepiaFilter alloc] init];
+    [self.sepiaFilter addTarget:imageView];
+    [self.sepiaFilter addTarget:self.movieWriter];
+    [self.videoCamera addTarget:self.sepiaFilter];
+    
+    UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(20, 20, self.timeLabel.frame.origin.x - 30 , 30)];
+    [slider addTarget:self action:@selector(test5_sliderChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.view addSubview:slider];
+    
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidChangeStatusBarOrientationNotification object:nil queue:nil usingBlock:^(NSNotification * _Nonnull note) {
+        self.videoCamera.outputImageOrientation = [UIApplication sharedApplication].statusBarOrientation;
+    }];
+    
+    
+}
+
+- (void)test5_pressButton:(UIButton *)button {
+    
+}
+
+- (void)test5_sliderChanged:(UISlider *)slider {
+    [self.sepiaFilter setIntensity:slider.value];
+}
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     if (_testMode == 4) {
@@ -172,6 +210,27 @@
         [self.tiltShiftFilter setTopFocusLevel:rate - 0.1];
         [self.tiltShiftFilter setBottomFocusLevel:rate + 0.1];
         [self.sourcePicture processImage];
+    }
+}
+
+//保存视频到相册
+- (void)saveMovieToLibrary {
+    ALAssetsLibrary *library = [[ALAssetsLibrary alloc] init];
+    if (UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(self.moviePath)) {
+        [library writeVideoAtPathToSavedPhotosAlbum:self.movieURL completionBlock:^(NSURL *assetURL, NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (error) {
+                    UIAlertView *alertView = [[UIAlertView alloc] initWithTitle:@"movie saved fail" message:@"" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+                    [alertView show];
+                } else {
+                    UIAlertView *alertView = [[UIAlertView alloc] initWithTitle:@"movie saved successfully" message:@"" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+                    [alertView show];
+                }
+            });
+        }];
+    } else {
+        UIAlertView *alertView = [[UIAlertView alloc] initWithTitle:@"movie saved fail" message:@"" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+        [alertView show];
     }
 }
 
