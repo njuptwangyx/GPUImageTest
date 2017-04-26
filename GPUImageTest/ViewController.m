@@ -29,6 +29,8 @@
 @property (nonatomic, strong) GPUImagePicture *sourcePicture;
 
 @property (nonatomic, strong) UILabel *timeLabel;
+@property (nonatomic, strong) NSTimer *mTimer;
+@property (nonatomic, strong) CADisplayLink *displayLink;
 
 @end
 
@@ -41,13 +43,14 @@
     self.moviePath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Movie.m4v"];
     self.movieURL = [NSURL fileURLWithPath:self.moviePath isDirectory:NO];
     
-    _testMode = 4;
+    _testMode = 5;
     
     switch (_testMode) {
         case 1: [self test1]; break;
         case 2: [self test2]; break;
         case 3: [self test3]; break;
         case 4: [self test4]; break;
+        case 5: [self test5]; break;
         
         default: break;
     }
@@ -154,36 +157,36 @@
 }
 
 
-//test5:
+//test5: 可以手动开始、停止录制视频，实时改变滤镜效果
 - (void)test5 {
     GPUImageView *imageView = [[GPUImageView alloc] initWithFrame:self.view.frame];
     imageView.fillMode = kGPUImageFillModeStretch;
     [self.view addSubview:imageView];
     
-    UIButton *button = [[UIButton alloc] initWithFrame:CGRectMake((self.view.frame.size.height - 100)/2, self.view.frame.size.height - 100, 100, 100)];
+    UIButton *button = [[UIButton alloc] initWithFrame:CGRectMake((self.view.frame.size.width - 100)/2, self.view.frame.size.height - 100, 100, 100)];
     [button setTitle:@"录制" forState:UIControlStateNormal];
+    [button setTitle:@"停止" forState:UIControlStateSelected];
     [button addTarget:self action:@selector(test5_pressButton:) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:button];
     
     self.timeLabel = [[UILabel alloc] initWithFrame:CGRectMake(self.view.frame.size.width - 100 - 20, 20, 100, 30)];
+    self.timeLabel.font = [UIFont systemFontOfSize:30];
     self.timeLabel.textColor = [UIColor whiteColor];
     self.timeLabel.textAlignment = NSTextAlignmentRight;
+    self.timeLabel.hidden = YES;
+    self.timeLabel.text = @"0";
     [self.view addSubview:self.timeLabel];
-    
-    self.movieWriter = [[GPUImageMovieWriter alloc] initWithMovieURL:self.movieURL size:CGSizeMake(720, 1280)];
-    self.movieWriter.encodingLiveVideo = YES;
     
     self.videoCamera = [[GPUImageVideoCamera alloc] initWithSessionPreset:AVCaptureSessionPreset1280x720 cameraPosition:AVCaptureDevicePositionBack];
     self.videoCamera.outputImageOrientation = [UIApplication sharedApplication].statusBarOrientation;
-    self.videoCamera.audioEncodingTarget = self.movieWriter;
     [self.videoCamera startCameraCapture];
     
     self.sepiaFilter = [[GPUImageSepiaFilter alloc] init];
     [self.sepiaFilter addTarget:imageView];
-    [self.sepiaFilter addTarget:self.movieWriter];
     [self.videoCamera addTarget:self.sepiaFilter];
     
     UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(20, 20, self.timeLabel.frame.origin.x - 30 , 30)];
+    slider.value = 1;
     [slider addTarget:self action:@selector(test5_sliderChanged:) forControlEvents:UIControlEventValueChanged];
     [self.view addSubview:slider];
     
@@ -191,16 +194,54 @@
         self.videoCamera.outputImageOrientation = [UIApplication sharedApplication].statusBarOrientation;
     }];
     
-    
+    self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(test5_displayLink:)];
+    [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSDefaultRunLoopMode];
 }
 
 - (void)test5_pressButton:(UIButton *)button {
     
+    if (button.selected) {
+        //停止录制
+        [self.movieWriter finishRecording];
+        self.videoCamera.audioEncodingTarget = nil;
+        [self.sepiaFilter removeTarget:self.movieWriter];
+        self.movieWriter = nil;
+        
+        self.timeLabel.hidden = YES;
+        self.timeLabel.text = @"0";
+        if (_mTimer) {
+            [_mTimer invalidate];
+            _mTimer = nil;
+        }
+        [self saveMovieToLibrary];
+    } else {
+        //开始录制
+        //把上一次文件删除，要不然writer会报错
+        unlink([self.moviePath UTF8String]);
+        
+        //每次录新视频都要创建新的witer对象，参考AVAssetWriter文档
+        self.movieWriter = [[GPUImageMovieWriter alloc] initWithMovieURL:self.movieURL size:CGSizeMake(720, 1280)];
+        self.movieWriter.encodingLiveVideo = YES;
+        self.videoCamera.audioEncodingTarget = self.movieWriter;
+        [self.sepiaFilter addTarget:self.movieWriter];
+        [self.movieWriter startRecording];
+        
+        self.timeLabel.hidden = NO;
+        self.mTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer * _Nonnull timer) {
+            self.timeLabel.text = [NSString stringWithFormat:@"%d", ([self.timeLabel.text intValue] + 1)];
+        }];
+    }
+    button.selected = !button.selected;
 }
 
 - (void)test5_sliderChanged:(UISlider *)slider {
     [self.sepiaFilter setIntensity:slider.value];
 }
+
+- (void)test5_displayLink:(CADisplayLink *)displayLink {
+    //NSLog(@"displayLink");
+}
+
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     if (_testMode == 4) {
