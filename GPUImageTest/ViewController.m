@@ -11,6 +11,24 @@
 #import "GPUImageBeautifyFilter.h"
 #import <AssetsLibrary/AssetsLibrary.h>
 
+// strong/weak transform macro; learn from Reactive cocoa.
+#ifndef weakify_self
+#if __has_feature(objc_arc)
+#define weakify_self autoreleasepool{} __weak __typeof__(self) weakSelf = self;
+#else
+#define weakify_self autoreleasepool{} __block __typeof__(self) blockSelf = self;
+#endif
+#endif
+
+#ifndef strongify_self
+#if __has_feature(objc_arc)
+#define strongify_self try{} @finally{} __typeof__(weakSelf) self = weakSelf;
+#else
+#define strongify_self try{} @finally{} __typeof__(blockSelf) self = blockSelf;
+#endif
+#endif
+
+
 @interface ViewController ()
 
 @property (nonatomic, assign) int testMode;
@@ -32,6 +50,8 @@
 @property (nonatomic, strong) NSTimer *mTimer;
 @property (nonatomic, strong) CADisplayLink *displayLink;
 
+@property (nonatomic, strong) GPUImageMovie *movieFile;
+
 @end
 
 @implementation ViewController
@@ -43,7 +63,7 @@
     self.moviePath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Movie.m4v"];
     self.movieURL = [NSURL fileURLWithPath:self.moviePath isDirectory:NO];
     
-    _testMode = 5;
+    _testMode = 7;
     
     switch (_testMode) {
         case 1: [self test1]; break;
@@ -51,7 +71,9 @@
         case 3: [self test3]; break;
         case 4: [self test4]; break;
         case 5: [self test5]; break;
-        
+        case 6: [self test6]; break;
+        case 7: [self test7]; break;
+            
         default: break;
     }
 }
@@ -60,6 +82,8 @@
 - (void)didReceiveMemoryWarning {
     [super didReceiveMemoryWarning];
     // Dispose of any resources that can be recreated.
+    
+    NSLog(@"didReceiveMemoryWarning");
 }
 
 //test1: 给图片加上滤镜
@@ -156,6 +180,17 @@
     NSLog(@"%d %d %d", size, unit, vector);
 }
 
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (_testMode == 4) {
+        UITouch *touch = [touches anyObject];
+        CGPoint point = [touch locationInView:self.view];
+        float rate = point.y / self.view.frame.size.height;
+        [self.tiltShiftFilter setTopFocusLevel:rate - 0.1];
+        [self.tiltShiftFilter setBottomFocusLevel:rate + 0.1];
+        [self.sourcePicture processImage];
+    }
+}
+
 
 //test5: 可以手动开始、停止录制视频，实时改变滤镜效果
 - (void)test5 {
@@ -243,16 +278,179 @@
 }
 
 
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    if (_testMode == 4) {
-        UITouch *touch = [touches anyObject];
-        CGPoint point = [touch locationInView:self.view];
-        float rate = point.y / self.view.frame.size.height;
-        [self.tiltShiftFilter setTopFocusLevel:rate - 0.1];
-        [self.tiltShiftFilter setBottomFocusLevel:rate + 0.1];
-        [self.sourcePicture processImage];
+//test6:视频作为水印录像
+- (void)test6 {
+    GPUImageView *imageView = [[GPUImageView alloc] initWithFrame:self.view.frame];
+    imageView.fillMode = kGPUImageFillModeStretch;
+    [self.view addSubview:imageView];
+    
+    self.timeLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 20, self.view.frame.size.width - 40, 30)];
+    self.timeLabel.font = [UIFont systemFontOfSize:30];
+    self.timeLabel.textColor = [UIColor whiteColor];
+    self.timeLabel.textAlignment = NSTextAlignmentRight;
+    [self.view addSubview:self.timeLabel];
+    
+    //摄像头
+    self.videoCamera = [[GPUImageVideoCamera alloc] initWithSessionPreset:AVCaptureSessionPreset640x480 cameraPosition:AVCaptureDevicePositionBack];
+    self.videoCamera.outputImageOrientation = [UIApplication sharedApplication].statusBarOrientation;
+    
+    //视频文件
+    self.movieFile = [[GPUImageMovie alloc] initWithURL:[[NSBundle mainBundle] URLForResource:@"testmovie" withExtension:@"mov"]];
+    self.movieFile.runBenchmark = YES;
+    self.movieFile.playAtActualSpeed = YES;
+    
+    //滤镜
+    GPUImageDissolveBlendFilter *filter = [[GPUImageDissolveBlendFilter alloc] init];
+    filter.mix = 0.5;
+    
+    //witer
+    self.movieWriter = [[GPUImageMovieWriter alloc] initWithMovieURL:self.movieURL size:CGSizeMake(480, 640)];
+    [self.movieWriter setAudioProcessingCallback:^(SInt16 **samplesRef, CMItemCount numSamplesInBuffer) {
+        
+    }];
+    
+    BOOL audioFromFile = NO;
+    if (audioFromFile) {
+        //响应连
+        [self.movieFile addTarget:filter];
+        [self.videoCamera addTarget:filter];
+        
+        self.movieWriter.shouldPassthroughAudio = YES;//是否使用源音源
+        self.movieFile.audioEncodingTarget = self.movieWriter;
+        [self.movieFile enableSynchronizedEncodingUsingMovieWriter:self.movieWriter];
+    } else {
+        //响应连
+        [self.videoCamera addTarget:filter];
+        [self.movieFile addTarget:filter];
+        
+        self.movieWriter.shouldPassthroughAudio = NO;
+        self.videoCamera.audioEncodingTarget = self.movieWriter;//音频来源是文件
+        self.movieWriter.encodingLiveVideo = NO;
     }
+    
+    //显示到界面
+    [filter addTarget:imageView];
+    [filter addTarget:self.movieWriter];
+    
+    unlink([self.moviePath UTF8String]);
+    
+    [self.videoCamera startCameraCapture];
+    [self.movieFile startProcessing];
+    [self.movieWriter startRecording];
+    
+    self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(test6_updateProgress:)];
+    [self.displayLink addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+    self.displayLink.paused = NO;
+    
+    @weakify_self;
+    self.movieWriter.completionBlock = ^() {
+        @strongify_self;
+        NSLog(@"writer complete!");
+        [self.displayLink invalidate];
+        [filter removeTarget:self.movieWriter];
+        //TODO:这一步会卡住，暂时没找到原因
+        [self.movieWriter finishRecording];
+        [self.movieFile endProcessing];
+        
+        [self saveMovieToLibrary];
+    };
 }
+
+- (void)test6_updateProgress:(CADisplayLink *)displayLink {
+    self.timeLabel.text = [NSString stringWithFormat:@"progress:%d%%", (int)(self.movieFile.progress * 100)];
+}
+
+
+//test7:
+- (void)test7 {
+    GPUImageView *imageView = [[GPUImageView alloc] initWithFrame:self.view.frame];
+    imageView.fillMode = kGPUImageFillModeStretch;
+    [self.view addSubview:imageView];
+    
+    self.timeLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 20, self.view.frame.size.width - 40, 30)];
+    self.timeLabel.font = [UIFont systemFontOfSize:30];
+    self.timeLabel.textColor = [UIColor whiteColor];
+    self.timeLabel.textAlignment = NSTextAlignmentRight;
+    [self.view addSubview:self.timeLabel];
+    
+    //视频文件
+    self.movieFile = [[GPUImageMovie alloc] initWithURL:[[NSBundle mainBundle] URLForResource:@"testmovie" withExtension:@"mov"]];
+    self.movieFile.runBenchmark = YES;
+    self.movieFile.playAtActualSpeed = YES;
+    
+    //滤镜
+    GPUImageDissolveBlendFilter *filter = [[GPUImageDissolveBlendFilter alloc] init];
+    filter.mix = 0.5;
+    
+    //witer
+    self.movieWriter = [[GPUImageMovieWriter alloc] initWithMovieURL:self.movieURL size:CGSizeMake(480, 640)];
+    
+    //水印
+    UILabel *watermarkLabel = [[UILabel alloc] initWithFrame:CGRectMake(100, 100, 100, 100)];
+    watermarkLabel.text = @"我是水印";
+    watermarkLabel.font = [UIFont systemFontOfSize:30];
+    watermarkLabel.textColor = [UIColor redColor];
+    [watermarkLabel sizeToFit];
+    
+    UIImageView *watermarkImage = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"watermark"]];
+    //watermarkImage.center = self.view.center;
+    UIView *subView = [[UIView alloc] initWithFrame:self.view.bounds];
+    subView.backgroundColor = [UIColor clearColor];
+    [subView addSubview:watermarkLabel];
+    [subView addSubview:watermarkImage];
+    
+    //把UIView对象转换成纹理对象
+    GPUImageUIElement *uielement = [[GPUImageUIElement alloc] initWithView:subView];
+    
+    GPUImageFilter *processFilter = [[GPUImageFilter alloc] init];
+    [self.movieFile addTarget:processFilter];
+    [processFilter addTarget:filter];
+    [uielement addTarget:filter];
+    
+    self.movieWriter.shouldPassthroughAudio = YES;
+    self.movieFile.audioEncodingTarget = self.movieWriter;
+    [self.movieFile enableSynchronizedEncodingUsingMovieWriter:self.movieWriter];
+    
+    //显示到界面
+    [filter addTarget:imageView];
+    [filter addTarget:self.movieWriter];
+    
+    unlink([self.moviePath UTF8String]);
+    
+    [self.movieWriter startRecording];
+    [self.movieFile startProcessing];
+    
+    self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(test6_updateProgress:)];
+    [self.displayLink addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+    self.displayLink.paused = NO;
+    
+    [processFilter setFrameProcessingCompletionBlock:^(GPUImageOutput *output, CMTime time) {
+        CGRect frame = watermarkImage.frame;
+        frame.origin.x += 5;
+        frame.origin.y += 5;
+        if (frame.origin.x > self.view.frame.size.width) {
+            frame.origin.x = 0;
+        }
+        if (frame.origin.y > self.view.frame.size.height) {
+            frame.origin.y = 0;
+        }
+        watermarkImage.frame = frame;
+        [uielement updateWithTimestamp:time];
+    }];
+    
+    @weakify_self;
+    self.movieWriter.completionBlock = ^() {
+        @strongify_self;
+        NSLog(@"writer complete!");
+        [self.displayLink invalidate];
+        [filter removeTarget:self.movieWriter];
+        [self.movieWriter finishRecording];
+        [self.movieFile endProcessing];
+        
+        [self saveMovieToLibrary];
+    };
+}
+
 
 //保存视频到相册
 - (void)saveMovieToLibrary {
